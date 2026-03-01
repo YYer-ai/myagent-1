@@ -1,6 +1,10 @@
 import os
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
+from langchain.tools import tool,ToolRuntime
+from langchain.messages import HumanMessage, AIMessage, SystemMessage
+from typing import TypedDict
+from langchain.agents.middleware import dynamic_prompt, ModelRequest
 
 # 初始化时自动从环境变量读取 DEEPSEEK_API_KEY（需提前导出）
 api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -13,53 +17,66 @@ deepseek = ChatOpenAI(
     openai_api_base="https://api.deepseek.com/v1",
 )
 
-def get_weather(city: str) -> str:
-    """Get weather for a given city."""
-    return f"It's always sunny in {city}!"
+
+@tool
+def get_last_user_message(runtime: ToolRuntime) -> str:
+    """Get the most recent message from the user."""
+    messages = runtime.state["messages"]
+
+    # Find the last human message
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return message.content
+
+    return "No user messages found"
+
+# Access custom state fields
+@tool
+def get_user_preference(
+    pref_name: str,
+    runtime: ToolRuntime
+) -> str:
+    """Get a user preference value."""
+    preferences = runtime.state.get("user_preferences", {})
+    return preferences.get(pref_name, "Not set")
+
+@tool
+def search_database(query: str, limit: int = 10) -> str:
+    """Search the customer database for records matching the query.
+
+    Args:
+        query: Search terms to look for
+        limit: Maximum number of results to return
+    """
+    return f"Found {limit} results for '{query}'"
+
+class Context(TypedDict):
+    user_role: str
+
+@dynamic_prompt
+def user_role_prompt(request: ModelRequest) -> str:
+    """Generate system prompt based on user role."""
+    user_role = request.runtime.context.get("user_role", "user")
+    base_prompt = "你是一个智能助手，能够根据用户角色调整回答的详细程度。"
+
+    if user_role == "专家":
+        return f"{base_prompt} 提供详细科学的解释，并使用专业术语。"
+    elif user_role == "初学者":
+        return f"{base_prompt} 解释尽量通俗易懂，避免专业术语。"
+
+    return base_prompt
 
 agent = create_agent(
     model=deepseek,
-    system_prompt="你是一个资深的技术HR，在AI领域经验丰富，非常善于面试agent人才",
-    tools=[get_weather])
-    
-messages = [
-    {"role": "user", "content": "你会怎么挑选AIagent工程师，并附上各能力权重表"}
-    ]
+    name="YY",
+    middleware=[user_role_prompt],
+    tools=[search_database, get_last_user_message, get_user_preference]
+    )
 
-input_dict = {"messages": messages} 
-response = agent.invoke(input_dict)
-
-# 提取AI响应内容
-ai_content = None
-
-# 从响应中提取AI消息内容
-if isinstance(response, dict) and 'messages' in response:
-    for msg in response['messages']:
-        if hasattr(msg, 'content') and 'AIMessage' in str(type(msg)):
-            ai_content = msg.content
-            break
-
-# 打印AI响应
-print("=" * 60)
-print("AI Agent 响应:")
-print("=" * 60)
-
-if ai_content:
-    try:
-        # 尝试直接打印
-        print(ai_content)
-    except UnicodeEncodeError:
-        try:
-            # 尝试使用GBK编码处理中文字符
-            print(ai_content.encode('gbk', errors='replace').decode('gbk'))
-        except:
-            # 最后使用repr
-            print(f"响应内容: {repr(ai_content)}")
-else:
-    # 如果没有找到AI内容，打印整个响应
-    try:
-        print(str(response))
-    except UnicodeEncodeError:
-        print(repr(response))
-
-print("=" * 60)
+Human_msg = HumanMessage(content="你叫什么，你是什么？")                        
+# agent.invoke() 应该接收一个字典，包含输入消息和上下文信息
+input_dict={
+    "messages": [Human_msg],
+}
+response = agent.invoke(input_dict, context={"user_role": "expert"})
+print(response)
