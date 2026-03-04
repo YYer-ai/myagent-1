@@ -5,6 +5,8 @@ from langchain.tools import tool,ToolRuntime
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from typing import TypedDict
 from langchain.agents.middleware import dynamic_prompt, ModelRequest
+from langgraph.types import Command
+from langgraph.checkpoint.memory import InMemorySaver
 
 # 初始化时自动从环境变量读取 DEEPSEEK_API_KEY（需提前导出）
 api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -17,7 +19,10 @@ deepseek = ChatOpenAI(
     openai_api_base="https://api.deepseek.com/v1",
 )
 
-
+@tool
+def set_user_name(new_name: str) -> Command:
+    """Set the user's name in the conversation state."""
+    return Command(update={"user_name": new_name})
 @tool
 def get_last_user_message(runtime: ToolRuntime) -> str:
     """Get the most recent message from the user."""
@@ -69,11 +74,12 @@ def user_role_prompt(request: ModelRequest) -> str:
 agent = create_agent(
     model=deepseek,
     name="YY",
+    checkpointer=InMemorySaver(),
     middleware=[user_role_prompt],
     tools=[search_database, get_last_user_message, get_user_preference]
     )
 
-Human_msg = HumanMessage(content="你叫什么，你是什么？")                        
+Human_msg = HumanMessage(content="你是什么？")                        
 # agent.invoke() 应该接收一个字典，包含输入消息和上下文信息
 input_dict={
     "messages": [Human_msg],
