@@ -1,13 +1,14 @@
 import os
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
-from langchain.tools import tool,ToolRuntime
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from langchain.agents.middleware import dynamic_prompt, ModelRequest
-from langgraph.types import Command
+from sqlalchemy import create_engine
 from langchain_core.prompts import ChatPromptTemplate,MessagesPlaceholder
-from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.messages import trim_messages
+from compressed_history import get_compressed_session_history
+
 
 # 初始化时自动从环境变量读取 DEEPSEEK_API_KEY（需提前导出）
 api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -20,19 +21,32 @@ deepseek = ChatOpenAI(
     openai_api_base="https://api.deepseek.com/v1",
 )
 
+
 agent = create_agent(
     model=deepseek,
     name="YY",
     )
 
 # 1. 准备存储容器（用于存放不同 Session 的对话历史）
-store = {}
+engine = create_engine("sqlite:///chat_history.db")
 
 def get_session_history(session_id: str):
-    if session_id not in store:
-        store[session_id] = ChatMessageHistory()
-    return store[session_id]
+    """获取压缩式会话历史
 
+    参数说明：
+    - buffer_size: 保留的原始对话数量（默认 10 轮）
+    - compress_threshold: 触发压缩的总消息数阈值（默认 15 条）
+    - compress_ratio: 压缩比例（默认 0.5，即最旧的 50% 消息会被压缩）
+    """
+    return get_compressed_session_history(
+        session_id=session_id,
+        engine=engine,
+        llm_for_compression=deepseek,  # 使用相同的 LLM 进行压缩
+        buffer_size=10,  # 保留最近 10 条原始对话
+        compress_threshold=15,  # 超过 15 条消息时触发压缩
+        compress_ratio=0.5,  # 压缩最旧的 50% 消息
+    )
+    
 def chat_with_agent():
     # 2. 定义 Prompt，关键在于 MessagesPlaceholder
     prompt = ChatPromptTemplate.from_messages([
@@ -57,7 +71,7 @@ def chat_with_agent():
     session_config = {"configurable": {"session_id": "user_001"}}
     
     while True:
-        user_input = input("你: ")
+        user_input = input("用户: ")
         if user_input.lower() in ['退出', 'exit', 'quit']:
             print("撒由那拉，再会喽！")
             break
